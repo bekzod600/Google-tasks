@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { supabase, TaskList, Task } from '../lib/supabase';
+import { syncQueueUtils } from '../lib/syncQueue';
 
 type Store = {
   taskLists: TaskList[];
@@ -16,6 +17,7 @@ type Store = {
   updateTask: (id: string, updates: Partial<Omit<Task, 'id' | 'list_id' | 'created_at'>>) => Promise<void>;
   toggleTask: (id: string, completed: boolean) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
+  reorderTasks: (orderedTaskIds: string[]) => Promise<void>;
   setSelectedListId: (id: string | null) => void;
 };
 
@@ -59,6 +61,13 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   addTaskList: async (name: string) => {
+    syncQueueUtils.addAction({
+      type: 'create',
+      entity: 'task_list',
+      entityId: `temp-${Date.now()}`,
+      data: { name },
+    });
+
     const { data, error } = await supabase
       .from('task_lists')
       .insert([{ name }])
@@ -73,6 +82,13 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   renameTaskList: async (id: string, name: string) => {
+    syncQueueUtils.addAction({
+      type: 'update',
+      entity: 'task_list',
+      entityId: id,
+      data: { name },
+    });
+
     await supabase
       .from('task_lists')
       .update({ name, updated_at: new Date().toISOString() })
@@ -86,6 +102,13 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   deleteTaskList: async (id: string) => {
+    syncQueueUtils.addAction({
+      type: 'delete',
+      entity: 'task_list',
+      entityId: id,
+      data: {},
+    });
+
     await supabase.from('task_lists').delete().eq('id', id);
     const newLists = get().taskLists.filter(list => list.id !== id);
     set({ taskLists: newLists });
@@ -100,9 +123,18 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   addTask: async (listId: string, title: string) => {
+    const tempId = `temp-${Date.now()}`;
+    syncQueueUtils.addAction({
+      type: 'create',
+      entity: 'task',
+      entityId: tempId,
+      data: { list_id: listId, title },
+    });
+
+    const maxOrder = get().tasks.reduce((max, task) => Math.max(max, task.order), -1);
     const { data, error } = await supabase
       .from('tasks')
-      .insert([{ list_id: listId, title }])
+      .insert([{ list_id: listId, title, order: maxOrder + 1 }])
       .select()
       .single();
 
@@ -112,6 +144,13 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   updateTask: async (id: string, updates: Partial<Omit<Task, 'id' | 'list_id' | 'created_at'>>) => {
+    syncQueueUtils.addAction({
+      type: 'update',
+      entity: 'task',
+      entityId: id,
+      data: updates,
+    });
+
     await supabase
       .from('tasks')
       .update({ ...updates, updated_at: new Date().toISOString() })
@@ -125,6 +164,13 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   toggleTask: async (id: string, completed: boolean) => {
+    syncQueueUtils.addAction({
+      type: 'update',
+      entity: 'task',
+      entityId: id,
+      data: { completed },
+    });
+
     await supabase
       .from('tasks')
       .update({ completed, updated_at: new Date().toISOString() })
@@ -138,8 +184,43 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   deleteTask: async (id: string) => {
+    syncQueueUtils.addAction({
+      type: 'delete',
+      entity: 'task',
+      entityId: id,
+      data: {},
+    });
+
     await supabase.from('tasks').delete().eq('id', id);
     set({ tasks: get().tasks.filter(task => task.id !== id) });
+  },
+
+  reorderTasks: async (orderedTaskIds: string[]) => {
+    syncQueueUtils.addAction({
+      type: 'update',
+      entity: 'task',
+      entityId: 'batch',
+      data: { orderedTaskIds },
+    });
+
+    const updates = orderedTaskIds.map((id, index) => ({
+      id,
+      order: index,
+    }));
+
+    for (const update of updates) {
+      await supabase
+        .from('tasks')
+        .update({ order: update.order, updated_at: new Date().toISOString() })
+        .eq('id', update.id);
+    }
+
+    const reorderedTasks = orderedTaskIds
+      .map(id => get().tasks.find(task => task.id === id))
+      .filter((task): task is Task => task !== undefined)
+      .map((task, index) => ({ ...task, order: index }));
+
+    set({ tasks: reorderedTasks });
   },
 
   setSelectedListId: (id: string | null) => {
