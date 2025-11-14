@@ -7,18 +7,22 @@ type Store = {
   tasks: Task[];
   selectedListId: string | null;
   isLoading: boolean;
+  searchQuery: string;
+  showCompleted: boolean;
 
   fetchTaskLists: () => Promise<void>;
   fetchTasks: (listId: string) => Promise<void>;
   addTaskList: (name: string) => Promise<string | null>;
   renameTaskList: (id: string, name: string) => Promise<void>;
   deleteTaskList: (id: string) => Promise<void>;
-  addTask: (listId: string, title: string) => Promise<void>;
+  addTask: (listId: string, title: string, dueDate?: string | null) => Promise<void>;
   updateTask: (id: string, updates: Partial<Omit<Task, 'id' | 'list_id' | 'created_at'>>) => Promise<void>;
   toggleTask: (id: string, completed: boolean) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   reorderTasks: (orderedTaskIds: string[]) => Promise<void>;
   setSelectedListId: (id: string | null) => void;
+  setSearchQuery: (query: string) => void;
+  setShowCompleted: (show: boolean) => void;
 };
 
 export const useStore = create<Store>((set, get) => ({
@@ -26,6 +30,8 @@ export const useStore = create<Store>((set, get) => ({
   tasks: [],
   selectedListId: null,
   isLoading: false,
+  searchQuery: '',
+  showCompleted: true,
 
   fetchTaskLists: async () => {
     set({ isLoading: true });
@@ -122,19 +128,18 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
-  addTask: async (listId: string, title: string) => {
+  addTask: async (listId: string, title: string, dueDate?: string | null) => {
     const tempId = `temp-${Date.now()}`;
     syncQueueUtils.addAction({
       type: 'create',
       entity: 'task',
       entityId: tempId,
-      data: { list_id: listId, title },
+      data: { list_id: listId, title, due_date: dueDate },
     });
 
-    const maxOrder = get().tasks.reduce((max, task) => Math.max(max, task.order), -1);
     const { data, error } = await supabase
       .from('tasks')
-      .insert([{ list_id: listId, title, order: maxOrder + 1 }])
+      .insert([{ list_id: listId, title, due_date: dueDate }])
       .select()
       .single();
 
@@ -228,5 +233,13 @@ export const useStore = create<Store>((set, get) => ({
     if (id) {
       get().fetchTasks(id);
     }
+  },
+
+  setSearchQuery: (query: string) => {
+    set({ searchQuery: query });
+  },
+
+  setShowCompleted: (show: boolean) => {
+    set({ showCompleted: show });
   },
 }));
